@@ -20,6 +20,13 @@ from .config import (
 from .console import console
 from .convert import run_conversion
 from .interactive import interactive_mode
+from .settings import (
+    USER_ENV_FILE,
+    get_openai_key,
+    load_env,
+    mask_key,
+    prompt_for_openai_key,
+)
 from .transcribe import faster_whisper_available, run_transcription, warn_missing_whisper
 
 
@@ -48,6 +55,7 @@ def cli(ctx):
       ncaster ~/Videos        scan another directory
       ncaster -r ~/Videos     scan recursively
     """
+    load_env()
     if ctx.invoked_subcommand is None:
         interactive_mode()
 
@@ -182,6 +190,36 @@ def transcribe_cmd(inputs, language, model_size, out_fmt, output_dir):
     if len(results) > 1:
         done = sum(1 for ok in results if ok)
         console.print(f"\n[bold]Done:[/] {done}/{len(results)} transcribed.")
+
+
+@cli.command("config")
+@click.option("--show", is_flag=True, default=False,
+              help="Show the current configuration without prompting.")
+@click.option("--set-key", is_flag=True, default=False,
+              help="Force re-entering the OpenAI API key.")
+def config_cmd(show, set_key):
+    """Show or set ncaster configuration (OpenAI API key).
+
+    \b
+    Run `ncaster config` with no key configured and it will ask you to paste one.
+    """
+    key = get_openai_key()
+
+    if show:
+        if key:
+            console.print(f"[green]OpenAI key configured[/]  ({mask_key(key)})")
+        else:
+            console.print("[yellow]No OpenAI key configured.[/]  "
+                          "Run [cyan]ncaster config[/] to add one.")
+        console.print(f"[dim]Config file: {USER_ENV_FILE}[/]")
+        return
+
+    if key and not set_key:
+        console.print(f"[green]OpenAI key already configured[/]  ({mask_key(key)})")
+        console.print("[dim]Use [cyan]ncaster config --set-key[/] to replace it.[/]")
+        return
+
+    prompt_for_openai_key()
 
 
 @cli.command("formats")

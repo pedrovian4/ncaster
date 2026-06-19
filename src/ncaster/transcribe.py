@@ -106,11 +106,15 @@ def get_whisper_model(model_size: str):
 
 
 def run_transcription(src: Path, dst: Path, model_size: str,
-                      language: str, fmt: str) -> bool:
-    """Transcribe one file and write the result. Returns success."""
+                      language: str, fmt: str) -> dict | None:
+    """Transcribe one file and write the result.
+
+    Returns ``{"segments": [...], "language": <code>}`` on success (so callers
+    can reuse the segments without re-transcribing) or ``None`` on failure.
+    """
     wav = extract_audio_wav(src)
     if wav is None:
-        return False
+        return None
 
     try:
         model = get_whisper_model(model_size)
@@ -146,10 +150,10 @@ def run_transcription(src: Path, dst: Path, model_size: str,
             f"({info.language_probability:.0%})  "
             f"{len(segments)} segments → [green]{dst.name}[/]"
         )
-        return True
+        return {"segments": segments, "language": info.language}
     except Exception as e:
         console.print(f"  [red]Transcription error:[/] {e}")
-        return False
+        return None
     finally:
         try:
             wav.unlink(missing_ok=True)

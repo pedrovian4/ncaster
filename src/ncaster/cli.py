@@ -1,5 +1,6 @@
 """Command-line interface: the click command group and subcommands."""
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -19,9 +20,18 @@ from .config import (
 )
 from .console import console
 from .convert import run_conversion
+from .editing import (
+    DEFAULT_MODEL,
+    EDITING_STYLES,
+    generate_editing_draft,
+    openai_available,
+    warn_missing_openai,
+    write_draft_md,
+)
 from .interactive import interactive_mode
 from .settings import (
     USER_ENV_FILE,
+    ensure_openai_key,
     get_openai_key,
     load_env,
     mask_key,
@@ -154,38 +164,67 @@ def cast_cmd(inputs, fmt, quality, speed, output_dir, suffix, gpu, dry_run, extr
               type=click.Choice(TRANSCRIPT_FORMATS, case_sensitive=False),
               show_default=True, help="Transcript output format.")
 @click.option("-o", "--output-dir", default=None, type=click.Path())
-def transcribe_cmd(inputs, language, model_size, out_fmt, output_dir):
+@click.option("--draft", "draft_style", default=None,
+              type=click.Choice(list(EDITING_STYLES.keys()), case_sensitive=False),
+              help="After transcribing, generate an AI editing draft in this style.")
+def transcribe_cmd(inputs, language, model_size, out_fmt, output_dir, draft_style):
     """Transcribe speech in INPUT file(s) to text/subtitles via local Whisper.
 
     \b
     Examples:
       ncaster transcribe talk.mp4
       ncaster transcribe aula.mov -l pt -f srt
-      ncaster transcribe podcast.mp3 -l en -m medium -f txt
+      ncaster transcribe short.mp4 --draft narrative-visual
     """
     if not faster_whisper_available():
         warn_missing_whisper()
         raise SystemExit(1)
 
+    # Validate the draft prerequisites up front so we fail before transcribing.
+    if draft_style:
+        if not openai_available():
+            warn_missing_openai()
+            raise SystemExit(1)
+        if not ensure_openai_key():
+            raise SystemExit(1)
+
     files = [Path(p) for p in inputs]
     console.print(Panel.fit(
         f"[bold cyan]ncaster transcribe[/]  {len(files)} file(s)  "
         f"lang=[yellow]{language}[/]  model=[yellow]{model_size}[/]  "
-        f"→ [bold]{out_fmt}[/]",
+        f"→ [bold]{out_fmt}[/]"
+        + (f"  [magenta]+draft:{draft_style}[/]" if draft_style else ""),
         border_style="cyan",
     ))
     console.print("[dim]Loading Whisper model (first run downloads it)…[/]\n")
 
+    ai_model = os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
     results = []
     for src in files:
         out_dir = Path(output_dir) if output_dir else src.parent
         out_dir.mkdir(parents=True, exist_ok=True)
         dst = out_dir / f"{src.stem}.{out_fmt}"
         console.print(f"[bold]{src.name}[/] → [green]{dst}[/]")
-        ok = run_transcription(src, dst, model_size, language, out_fmt)
-        if not ok:
+        result = run_transcription(src, dst, model_size, language, out_fmt)
+        if result is None:
             console.print("  [red]Failed[/]")
-        results.append(ok)
+            results.append(False)
+            continue
+        results.append(True)
+
+        if draft_style:
+            draft_dst = out_dir / f"{src.stem}.draft.md"
+            console.print(f"  [dim]Drafting overlays with OpenAI ({ai_model})…[/]")
+            items = generate_editing_draft(
+                result["segments"], style=draft_style,
+                model=ai_model, language=result["language"],
+            )
+            if items is None:
+                console.print("  [red]Draft failed[/]")
+            else:
+                write_draft_md(items, draft_dst, draft_style, src.name,
+                               result["language"], ai_model)
+                console.print(f"  [green]Draft[/]  {len(items)} overlays → [green]{draft_dst.name}[/]")
 
     if len(results) > 1:
         done = sum(1 for ok in results if ok)

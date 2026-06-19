@@ -29,6 +29,7 @@ It's built on FFmpeg and local Whisper, with an interactive mode that fuzzy-find
 - **Live progress bars** with ETA, plus a size-reduction summary after each job.
 - **Audio extraction** — pull audio out of a video straight into `mp3`, `flac`, `opus`, etc.
 - **Local transcription** — speech-to-text with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), running fully offline (no API, nothing uploaded). Outputs `srt`, `vtt`, `txt`, or `json`.
+- **AI editing drafts** — from a transcript, generate a per-segment **overlay plan** for short-form video (the *Narrative Visual* style): what B-roll / image / graphic to show over the speaker as they say each line. Uses OpenAI (lightweight `gpt-4o-mini`) on the transcript text only — your audio/video never leaves your machine.
 
 ## Supported formats
 
@@ -52,6 +53,7 @@ It's built on FFmpeg and local Whisper, with an interactive mode that fuzzy-find
 - **[FFmpeg](https://ffmpeg.org/)** (`ffmpeg` and `ffprobe` on your `PATH`)
 - **[fzf](https://github.com/junegunn/fzf)** *(optional)* — enables fuzzy file selection in interactive mode
 - **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** *(optional)* — required only for `transcribe`; installed via the `[transcribe]` extra
+- **[openai](https://pypi.org/project/openai/)** *(optional)* — required only for AI editing drafts; installed via the `[ai]` extra. Needs an `OPENAI_API_KEY` (see [Configuration](#configuration))
 
 ## Installation
 
@@ -66,6 +68,9 @@ uv tool install .
 
 # with transcription support
 uv tool install ".[transcribe]"
+
+# everything (convert + transcribe + AI editing drafts)
+uv tool install ".[transcribe,ai]"
 ```
 
 This puts an `ncaster` executable on your `PATH` (typically `~/.local/bin/ncaster`).
@@ -73,8 +78,24 @@ This puts an `ncaster` executable on your `PATH` (typically `~/.local/bin/ncaste
 To update after pulling changes, append `--reinstall`:
 
 ```bash
-uv tool install ".[transcribe]" --reinstall
+uv tool install ".[transcribe,ai]" --reinstall
 ```
+
+## Configuration
+
+AI editing drafts need an OpenAI API key. ncaster looks for it in
+`OPENAI_API_KEY` (env), then `~/.config/ncaster/.env`, then a local `.env`.
+If none is set, it asks you to paste one the first time it's needed and saves
+it to `~/.config/ncaster/.env`.
+
+```bash
+ncaster config            # show status, or prompt for a key if missing
+ncaster config --show     # show the (masked) key and config file path
+ncaster config --set-key  # replace the stored key
+```
+
+> The key is used **only** for the text-based editing drafts. Transcription is
+> always local — no audio or video is ever sent anywhere.
 
 ## Usage
 
@@ -130,6 +151,34 @@ ncaster transcribe podcast.mp3 -l en -m medium -f txt
 | `-f, --format`     | `srt`    | `srt`, `vtt`, `txt`, `json`                        |
 | `-o, --output-dir` | input    | Output directory                                   |
 
+### AI editing drafts (Narrative Visual)
+
+Turn a transcript into an overlay plan for vertical short-form video. For each
+spoken segment, ncaster proposes a visual (B-roll, image, graphic, or text
+overlay) to show over the speaker — perfect as a starting point for editing
+Shorts, Reels, and TikToks. It writes a `<name>.draft.md` next to the video.
+
+In **interactive mode**, after transcribing you're asked *"Generate an AI
+editing draft?"* — pick the style and ncaster does the rest. From the CLI:
+
+```bash
+# Transcribe, then generate the overlay draft in one go
+ncaster transcribe short.mp4 --draft narrative-visual
+
+# Portuguese Reel
+ncaster transcribe reel.mp4 -l pt --draft narrative-visual
+```
+
+Example draft entry:
+
+```markdown
+## 00:00:00,000 → 00:00:11,000
+🗣️  And so my fellow Americans, ask not what your country can do for you…
+🎬  **Overlay:** A waving American flag with the sun setting in the background.
+```
+
+The model is configurable via `OPENAI_MODEL` (default `gpt-4o-mini`).
+
 ### Other commands
 
 ```bash
@@ -158,9 +207,11 @@ src/ncaster/
 ├── __main__.py      # python -m ncaster
 ├── config.py        # format/codec profiles, quality & language tables
 ├── console.py       # shared Rich console
+├── settings.py      # .env loading + OpenAI key management
 ├── probe.py         # ffprobe helpers + human-readable formatting
 ├── convert.py       # ffmpeg command building & progress-tracked runs
 ├── transcribe.py    # local Whisper transcription + subtitle writers
+├── editing.py       # AI editing drafts (Narrative Visual) via OpenAI
 ├── interactive.py   # directory scan, fzf picker, guided flows
 └── cli.py           # click command group and subcommands
 tests/               # unit tests for the pure logic
@@ -169,8 +220,8 @@ tests/               # unit tests for the pure logic
 ## Development
 
 ```bash
-uv run --extra dev --extra transcribe pytest   # run the test suite
-uv run python -m ncaster --help                # run from source
+uv run --extra dev --extra transcribe --extra ai pytest   # run the test suite
+uv run python -m ncaster --help                           # run from source
 ```
 
 ## License

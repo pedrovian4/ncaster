@@ -290,16 +290,73 @@ def _interactive_transcribe(selected: list[Path], base: Path) -> None:
         return
 
     console.print("[dim]Loading Whisper model (first run downloads it)…[/]\n")
+    transcribed: list[tuple[Path, dict]] = []
     results = []
     for src in selected:
         dst = out_dir / f"{src.stem}.{out_fmt}"
         console.print(f"[bold]{src.name}[/] → [green]{dst.name}[/]")
-        ok = run_transcription(src, dst, model_size, language, out_fmt)
-        if not ok:
+        result = run_transcription(src, dst, model_size, language, out_fmt)
+        if result is None:
             console.print("  [red]Failed[/]")
-        results.append(ok)
+        else:
+            transcribed.append((src, result))
+        results.append(result is not None)
 
     _print_summary(results, "transcribed")
+
+    if transcribed:
+        _maybe_generate_drafts(transcribed, out_dir)
+
+
+def _maybe_generate_drafts(transcribed: list[tuple[Path, dict]], out_dir: Path) -> None:
+    """After transcription, optionally generate an AI editing draft per file."""
+    from .editing import (
+        EDITING_STYLES,
+        generate_editing_draft,
+        openai_available,
+        warn_missing_openai,
+        write_draft_md,
+    )
+    from .settings import ensure_openai_key
+
+    console.print()
+    if not questionary.confirm(
+        "Generate an AI editing draft from the transcript(s)?",
+        default=False, style=Q_STYLE,
+    ).ask():
+        return
+
+    if not openai_available():
+        warn_missing_openai()
+        return
+    if not ensure_openai_key():
+        return
+
+    style = questionary.select(
+        "Editing style:",
+        choices=[questionary.Choice(meta["label"], value=key)
+                 for key, meta in EDITING_STYLES.items()],
+        style=Q_STYLE,
+    ).ask()
+    if not style:
+        return
+
+    from .editing import DEFAULT_MODEL
+    import os
+    model = os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
+
+    console.print(f"[dim]Asking OpenAI ({model}) for overlay suggestions…[/]\n")
+    for src, result in transcribed:
+        dst = out_dir / f"{src.stem}.draft.md"
+        console.print(f"[bold]{src.name}[/] → [green]{dst.name}[/]")
+        items = generate_editing_draft(
+            result["segments"], style=style, model=model, language=result["language"],
+        )
+        if items is None:
+            console.print("  [red]Draft failed[/]")
+            continue
+        write_draft_md(items, dst, style, src.name, result["language"], model)
+        console.print(f"  [green]Done[/]  {len(items)} overlay suggestions → [green]{dst.name}[/]")
 
 
 def _print_summary(results: list[bool], verb: str) -> None:

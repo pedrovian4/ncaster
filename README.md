@@ -177,12 +177,14 @@ If a transcript already exists for the file, interactive mode asks whether to
 **reuse it or transcribe again**, and the CLI reuses it with `--reuse`. If the
 OpenAI key is rejected, ncaster tells you it was wrong and asks for a new one.
 
-Example draft entry:
+Each entry includes the spoken line, an overlay idea, and ready-to-use
+**English stock-bank search terms** (for Pexels, Unsplash, Pixabay, etc.):
 
 ```markdown
-## 00:00:00,000 → 00:00:11,000
-🗣️  And so my fellow Americans, ask not what your country can do for you…
-🎬  **Overlay:** A waving American flag with the sun setting in the background.
+## 00:00:03,000 → 00:00:06,500
+🗣️  First, I make a strong cup of coffee.
+🎬  **Overlay:** A steaming cup of coffee being poured into a mug.
+🔎  **Stock search (EN):** coffee pour · steaming coffee · morning coffee
 ```
 
 The model is configurable via `OPENAI_MODEL` (default `gpt-4o-mini`).

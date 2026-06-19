@@ -53,6 +53,20 @@ def warn_missing_openai() -> None:
     ))
 
 
+def _coerce_terms(raw) -> list[str]:
+    """Normalize the model's 'search' field into a clean list of strings."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        parts = raw.split(",")
+    else:
+        try:
+            parts = list(raw)
+        except TypeError:
+            return []
+    return [str(t).strip() for t in parts if str(t).strip()]
+
+
 def _narrative_visual_messages(batch: list[dict], language: str) -> list[dict]:
     lang_name = _LANG_NAMES.get(language, "the transcript's language")
     system = (
@@ -67,12 +81,16 @@ def _narrative_visual_messages(batch: list[dict], language: str) -> list[dict]:
         "- One concrete, vivid suggestion per segment, max ~18 words.\n"
         "- Describe WHAT to show, not how to film it; do not generate the image.\n"
         "- Make it specific to the words of that segment; vary ideas, avoid repeats.\n"
-        "- If a segment is filler with nothing to illustrate, return "
-        "\"keep on speaker, no overlay\".\n"
+        "- If a segment is filler with nothing to illustrate, set visual to "
+        "\"keep on speaker, no overlay\" and search to [].\n"
         f"- Write the visual descriptions in {lang_name}.\n"
+        "- Also provide 'search': 2-4 short, concrete stock-footage/photo search "
+        "queries to find that overlay on stock banks (Pexels, Unsplash, "
+        "Pixabay). The search queries MUST be in English regardless of the "
+        "transcript language.\n"
         "Respond ONLY with JSON of the form "
-        "{\"suggestions\": [{\"index\": <int>, \"visual\": <string>}]} "
-        "covering every index you are given."
+        "{\"suggestions\": [{\"index\": <int>, \"visual\": <string>, "
+        "\"search\": [<string>, ...]}]} covering every index you are given."
     )
     user = json.dumps(
         {"segments": [{"index": s["index"], "text": s["text"].strip()} for s in batch]},
@@ -120,6 +138,7 @@ def generate_editing_draft(
         client = OpenAI(api_key=key)
         try:
             visuals: dict[int, str] = {}
+            searches: dict[int, list[str]] = {}
             for start in range(0, len(indexed), _BATCH_SIZE):
                 batch = indexed[start:start + _BATCH_SIZE]
                 resp = client.chat.completions.create(
@@ -130,9 +149,15 @@ def generate_editing_draft(
                 )
                 data = json.loads(resp.choices[0].message.content)
                 for item in data.get("suggestions", []):
-                    visuals[int(item["index"])] = str(item["visual"]).strip()
+                    idx = int(item["index"])
+                    visuals[idx] = str(item["visual"]).strip()
+                    searches[idx] = _coerce_terms(item.get("search"))
             return [
-                {**s, "visual": visuals.get(i, "keep on speaker, no overlay")}
+                {
+                    **s,
+                    "visual": visuals.get(i, "keep on speaker, no overlay"),
+                    "search": searches.get(i, []),
+                }
                 for i, s in enumerate(segments)
             ]
         except auth_error:
@@ -174,11 +199,14 @@ def write_draft_md(
     ]
     for s in items:
         ts = f"{format_timestamp(s['start'])} → {format_timestamp(s['end'])}"
+        terms = s.get("search") or []
+        search_line = " · ".join(terms) if terms else "—"
         lines += [
             f"## {ts}",
             f"🗣️  {s['text'].strip()}",
             "",
             f"🎬  **Overlay:** {s['visual']}",
+            f"🔎  **Stock search (EN):** {search_line}",
             "",
         ]
     dst.write_text("\n".join(lines), encoding="utf-8")

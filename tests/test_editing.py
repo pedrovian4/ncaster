@@ -25,14 +25,23 @@ def test_messages_include_indices_and_language():
 
 
 def test_write_draft_md(tmp_path: Path):
-    items = [{**s, "visual": f"overlay {i}"} for i, s in enumerate(SEGMENTS)]
+    items = [{**s, "visual": f"overlay {i}", "search": [f"term{i}a", f"term{i}b"]}
+             for i, s in enumerate(SEGMENTS)]
     dst = tmp_path / "v.draft.md"
     write_draft_md(items, dst, "narrative-visual", "v.mp4", "en", "gpt-4o-mini")
     text = dst.read_text(encoding="utf-8")
     assert "# Editing draft — Narrative Visual" in text
     assert "rocket lifted off" in text
     assert "**Overlay:** overlay 0" in text
+    assert "**Stock search (EN):** term0a · term0b" in text
     assert "00:00:00,000 → 00:00:02,000" in text
+
+
+def test_write_draft_md_handles_missing_search(tmp_path: Path):
+    items = [{**SEGMENTS[0], "visual": "x"}]  # no 'search' key
+    dst = tmp_path / "v.draft.md"
+    write_draft_md(items, dst, "narrative-visual", "v.mp4", "en", "gpt-4o-mini")
+    assert "**Stock search (EN):** —" in dst.read_text(encoding="utf-8")
 
 
 def _install_fake_openai(monkeypatch, response_obj):
@@ -65,8 +74,9 @@ def _install_fake_openai(monkeypatch, response_obj):
 def test_generate_editing_draft_merges_suggestions(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     response = {"suggestions": [
-        {"index": 0, "visual": "B-roll of a rocket launch"},
-        {"index": 1, "visual": "Crowd cheering on a beach"},
+        {"index": 0, "visual": "B-roll of a rocket launch",
+         "search": ["rocket launch", "space shuttle liftoff"]},
+        {"index": 1, "visual": "Crowd cheering on a beach", "search": "beach crowd, cheering people"},
     ]}
     captured = _install_fake_openai(monkeypatch, response)
 
@@ -74,6 +84,9 @@ def test_generate_editing_draft_merges_suggestions(monkeypatch):
                                    model="gpt-4o-mini", language="en")
     assert items is not None
     assert items[0]["visual"] == "B-roll of a rocket launch"
+    assert items[0]["search"] == ["rocket launch", "space shuttle liftoff"]
+    # comma-separated string is coerced into a list
+    assert items[1]["search"] == ["beach crowd", "cheering people"]
     assert items[1]["visual"] == "Crowd cheering on a beach"
     # uses the configured key and JSON response format
     assert captured["api_key"] == "sk-test"

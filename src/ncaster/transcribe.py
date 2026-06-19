@@ -1,0 +1,157 @@
+"""Local speech-to-text transcription using faster-whisper (optional dependency)."""
+
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
+
+from .console import console
+from .probe import probe_duration
+
+# Loaded models are cached per size for the lifetime of the process.
+_WHISPER_MODEL_CACHE: dict = {}
+
+
+def faster_whisper_available() -> bool:
+    try:
+        import faster_whisper  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def warn_missing_whisper() -> None:
+    console.print(Panel.fit(
+        "[red]Transcription support is not installed.[/]\n\n"
+        "Add it with one of:\n"
+        "  [cyan]uv tool install \"ncaster[transcribe]\" --reinstall[/]\n"
+        "  [cyan]uv tool install \".[transcribe]\" --reinstall[/]  [dim](from a clone)[/]\n\n"
+        "[dim]This pulls in faster-whisper (CTranslate2). Models download on first use.[/]",
+        border_style="red",
+    ))
+
+
+def extract_audio_wav(src: Path) -> Path | None:
+    """Extract mono 16 kHz WAV (what Whisper expects) to a temp file."""
+    tmp = Path(tempfile.gettempdir()) / f"ncaster_{os.getpid()}_{src.stem}.wav"
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000",
+         "-f", "wav", str(tmp)],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        console.print(f"  [red]Audio extraction failed:[/] {r.stderr[-300:]}")
+        return None
+    return tmp
+
+
+def format_timestamp(seconds: float, vtt: bool = False) -> str:
+    """Format seconds as ``HH:MM:SS,mmm`` (SRT) or ``HH:MM:SS.mmm`` (VTT)."""
+    ms = int(round(seconds * 1000))
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1000)
+    sep = "." if vtt else ","
+    return f"{h:02d}:{m:02d}:{s:02d}{sep}{ms:03d}"
+
+
+def write_transcript(segments: list[dict], info: dict, dst: Path, fmt: str) -> None:
+    """Serialize transcription segments to the requested output format."""
+    if fmt == "txt":
+        dst.write_text(
+            "\n".join(s["text"].strip() for s in segments) + "\n", encoding="utf-8"
+        )
+    elif fmt == "srt":
+        lines = []
+        for i, s in enumerate(segments, 1):
+            lines += [str(i),
+                      f"{format_timestamp(s['start'])} --> {format_timestamp(s['end'])}",
+                      s["text"].strip(), ""]
+        dst.write_text("\n".join(lines), encoding="utf-8")
+    elif fmt == "vtt":
+        lines = ["WEBVTT", ""]
+        for s in segments:
+            lines += [f"{format_timestamp(s['start'], vtt=True)} --> "
+                      f"{format_timestamp(s['end'], vtt=True)}",
+                      s["text"].strip(), ""]
+        dst.write_text("\n".join(lines), encoding="utf-8")
+    elif fmt == "json":
+        dst.write_text(json.dumps({
+            "language": info["language"],
+            "language_probability": info["language_probability"],
+            "duration": info["duration"],
+            "segments": segments,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_whisper_model(model_size: str):
+    if model_size not in _WHISPER_MODEL_CACHE:
+        from faster_whisper import WhisperModel
+        # CPU-friendly defaults; int8 keeps memory and time low.
+        _WHISPER_MODEL_CACHE[model_size] = WhisperModel(
+            model_size, device="cpu", compute_type="int8"
+        )
+    return _WHISPER_MODEL_CACHE[model_size]
+
+
+def run_transcription(src: Path, dst: Path, model_size: str,
+                      language: str, fmt: str) -> bool:
+    """Transcribe one file and write the result. Returns success."""
+    wav = extract_audio_wav(src)
+    if wav is None:
+        return False
+
+    try:
+        model = get_whisper_model(model_size)
+        total = probe_duration(src)
+        lang = None if language == "auto" else language
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]{task.description}"),
+            BarColumn(bar_width=30),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task(f"transcribing {src.name}", total=total or 100)
+            seg_iter, info = model.transcribe(str(wav), language=lang)
+            segments = []
+            for seg in seg_iter:
+                segments.append({"start": seg.start, "end": seg.end, "text": seg.text})
+                if total:
+                    progress.update(task, completed=min(seg.end, total))
+            progress.update(task, completed=total or 100)
+
+        write_transcript(segments, {
+            "language": info.language,
+            "language_probability": round(info.language_probability, 3),
+            "duration": info.duration,
+        }, dst, fmt)
+
+        console.print(
+            f"  [green]Done[/]  lang=[yellow]{info.language}[/] "
+            f"({info.language_probability:.0%})  "
+            f"{len(segments)} segments → [green]{dst.name}[/]"
+        )
+        return True
+    except Exception as e:
+        console.print(f"  [red]Transcription error:[/] {e}")
+        return False
+    finally:
+        try:
+            wav.unlink(missing_ok=True)
+        except Exception:
+            pass

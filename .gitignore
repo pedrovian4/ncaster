@@ -9,6 +9,10 @@ venv/
 
 # uv
 .uv/
+uv.lock
+
+# pytest
+.pytest_cache/
 
 # Editor / OS
 .DS_Store

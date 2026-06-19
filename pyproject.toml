@@ -4,8 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ncaster"
-version = "1.0.0"
-description = "High-quality CLI video/audio format converter powered by FFmpeg"
+version = "1.1.0"
+description = "CLI companion for editing audiovisual productions for social media and YouTube: convert, compress, extract audio, and subtitle with FFmpeg and local Whisper"
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
     "click>=8.0",
@@ -13,8 +15,19 @@ dependencies = [
     "questionary>=2.0",
 ]
 
+[project.optional-dependencies]
+transcribe = [
+    "faster-whisper>=1.0",
+]
+dev = [
+    "pytest>=8.0",
+]
+
 [project.scripts]
-ncaster = "ncaster:cli"
+ncaster = "ncaster.cli:cli"
 
 [tool.hatch.build.targets.wheel]
-modules = ["ncaster"]
+packages = ["src/ncaster"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

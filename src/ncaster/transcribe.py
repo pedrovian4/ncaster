@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -159,3 +160,69 @@ def run_transcription(src: Path, dst: Path, model_size: str,
             wav.unlink(missing_ok=True)
         except Exception:
             pass
+
+
+# Formats we can parse back into timed segments, richest first.
+REUSABLE_EXTS = ("json", "srt", "vtt")
+
+
+def find_existing_transcripts(stem: str, directory: Path) -> list[Path]:
+    """Return existing transcript files for ``stem`` in ``directory`` (richest first)."""
+    return [
+        directory / f"{stem}.{ext}"
+        for ext in REUSABLE_EXTS
+        if (directory / f"{stem}.{ext}").is_file()
+    ]
+
+
+def _parse_ts(value: str) -> float:
+    """Parse an SRT/VTT timestamp (``HH:MM:SS,mmm`` or ``HH:MM:SS.mmm``)."""
+    value = value.strip().replace(",", ".")
+    h, m, s = value.split(":")
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+def _parse_srt_vtt(path: Path) -> list[dict]:
+    text = path.read_text(encoding="utf-8")
+    segments: list[dict] = []
+    for block in re.split(r"\n\s*\n", text.strip()):
+        lines = [ln for ln in block.splitlines() if ln.strip()]
+        ts_idx = next((i for i, ln in enumerate(lines) if "-->" in ln), None)
+        if ts_idx is None:
+            continue  # header or index-only block
+        start_raw, _, end_raw = lines[ts_idx].partition("-->")
+        try:
+            start = _parse_ts(start_raw)
+            end = _parse_ts(end_raw.split()[0])  # drop any VTT cue settings
+        except ValueError:
+            continue
+        body = " ".join(lines[ts_idx + 1:]).strip()
+        if body:
+            segments.append({"start": start, "end": end, "text": body})
+    return segments
+
+
+def parse_transcript(path: Path) -> dict | None:
+    """Parse an existing transcript file back into ``{"segments", "language"}``.
+
+    Returns None if the file can't be parsed into timed segments.
+    """
+    try:
+        suffix = path.suffix.lower()
+        if suffix == ".json":
+            data = json.loads(path.read_text(encoding="utf-8"))
+            segs = [
+                {"start": s["start"], "end": s["end"], "text": s["text"]}
+                for s in data.get("segments", [])
+            ]
+            if not segs:
+                return None
+            return {"segments": segs, "language": data.get("language", "auto")}
+        if suffix in (".srt", ".vtt"):
+            segs = _parse_srt_vtt(path)
+            if not segs:
+                return None
+            return {"segments": segs, "language": "auto"}
+    except Exception:
+        return None
+    return None

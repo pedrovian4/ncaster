@@ -89,9 +89,47 @@ def test_generate_editing_draft_fills_missing(monkeypatch):
     assert items[1]["visual"] == "keep on speaker, no overlay"
 
 
-def test_generate_editing_draft_without_key(monkeypatch):
+def test_generate_editing_draft_without_key_non_interactive(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPEN_AI_API_KEY", raising=False)
     # also ensure no .env on disk leaks a key into this process
     monkeypatch.setattr("ncaster.editing.get_openai_key", lambda: None)
-    assert generate_editing_draft(SEGMENTS, language="en") is None
+    # need a fake openai module so the import inside the function succeeds
+    _install_fake_openai(monkeypatch, {"suggestions": []})
+    assert generate_editing_draft(SEGMENTS, language="en", interactive=False) is None
+
+
+def test_generate_editing_draft_reprompts_on_auth_error(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-wrong")
+
+    class _AuthError(Exception):
+        pass
+
+    calls = {"n": 0}
+
+    class _Completions:
+        def create(self, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise _AuthError("invalid api key")
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(
+                message=types.SimpleNamespace(
+                    content=json.dumps({"suggestions": [{"index": 0, "visual": "ok"},
+                                                        {"index": 1, "visual": "ok2"}]})))])
+
+    class OpenAI:
+        def __init__(self, api_key=None):
+            self.chat = types.SimpleNamespace(completions=_Completions())
+
+    fake = types.ModuleType("openai")
+    fake.OpenAI = OpenAI
+    fake.AuthenticationError = _AuthError
+    monkeypatch.setitem(sys.modules, "openai", fake)
+
+    # after the first (wrong) key fails, simulate the user entering a good one
+    monkeypatch.setattr("ncaster.editing.prompt_for_openai_key", lambda: "sk-good")
+
+    items = generate_editing_draft(SEGMENTS, language="en", interactive=True)
+    assert items is not None
+    assert calls["n"] == 2  # retried once after the auth error
+    assert items[0]["visual"] == "ok"

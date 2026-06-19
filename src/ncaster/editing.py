@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .console import console
 from .probe import human_duration
-from .settings import get_openai_key
+from .settings import get_openai_key, prompt_for_openai_key
 from .transcribe import format_timestamp
 
 DEFAULT_MODEL = "gpt-4o-mini"
@@ -88,43 +88,64 @@ def generate_editing_draft(
     style: str = "narrative-visual",
     model: str | None = None,
     language: str = "auto",
+    interactive: bool = True,
 ) -> list[dict] | None:
-    """Return segments enriched with a ``visual`` suggestion, or None on failure."""
-    key = get_openai_key()
-    if not key:
-        console.print("[red]No OpenAI API key configured.[/] Run [cyan]ncaster config[/].")
-        return None
+    """Return segments enriched with a ``visual`` suggestion, or None on failure.
+
+    On an authentication error the key is reported as wrong and, when
+    ``interactive`` is set, the user is asked to enter a new one and we retry.
+    """
     if style not in EDITING_STYLES:
         console.print(f"[red]Unknown editing style:[/] {style}")
         return None
 
+    import openai as openai_mod
     from openai import OpenAI
-    client = OpenAI(api_key=key)
+    auth_error = getattr(openai_mod, "AuthenticationError", None) or ()
+
     model = model or DEFAULT_MODEL
-
     indexed = [{**s, "index": i} for i, s in enumerate(segments)]
-    visuals: dict[int, str] = {}
 
-    for start in range(0, len(indexed), _BATCH_SIZE):
-        batch = indexed[start:start + _BATCH_SIZE]
+    while True:
+        key = get_openai_key()
+        if not key:
+            if not interactive:
+                console.print("[red]No OpenAI API key configured.[/] Run [cyan]ncaster config[/].")
+                return None
+            key = prompt_for_openai_key()
+            if not key:
+                return None
+
+        client = OpenAI(api_key=key)
         try:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=_narrative_visual_messages(batch, language),
-                response_format={"type": "json_object"},
-                temperature=0.8,
-            )
-            data = json.loads(resp.choices[0].message.content)
-            for item in data.get("suggestions", []):
-                visuals[int(item["index"])] = str(item["visual"]).strip()
+            visuals: dict[int, str] = {}
+            for start in range(0, len(indexed), _BATCH_SIZE):
+                batch = indexed[start:start + _BATCH_SIZE]
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=_narrative_visual_messages(batch, language),
+                    response_format={"type": "json_object"},
+                    temperature=0.8,
+                )
+                data = json.loads(resp.choices[0].message.content)
+                for item in data.get("suggestions", []):
+                    visuals[int(item["index"])] = str(item["visual"]).strip()
+            return [
+                {**s, "visual": visuals.get(i, "keep on speaker, no overlay")}
+                for i, s in enumerate(segments)
+            ]
+        except auth_error:
+            console.print("[red]OpenAI rejected the API key (authentication failed).[/]")
+            if not interactive:
+                console.print("Run [cyan]ncaster config --set-key[/] with a valid key.")
+                return None
+            console.print("[yellow]The API key seems wrong — let's set a new one.[/]")
+            if not prompt_for_openai_key():
+                return None
+            # loop again with the freshly entered key
         except Exception as e:
             console.print(f"  [red]OpenAI error:[/] {e}")
             return None
-
-    return [
-        {**s, "visual": visuals.get(i, "keep on speaker, no overlay")}
-        for i, s in enumerate(segments)
-    ]
 
 
 def write_draft_md(

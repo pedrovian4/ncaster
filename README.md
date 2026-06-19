@@ -167,7 +167,14 @@ ncaster transcribe short.mp4 --draft narrative-visual
 
 # Portuguese Reel
 ncaster transcribe reel.mp4 -l pt --draft narrative-visual
+
+# Reuse an existing transcript (json/srt/vtt) — skips Whisper
+ncaster transcribe short.mp4 --reuse --draft narrative-visual
 ```
+
+If a transcript already exists for the file, interactive mode asks whether to
+**reuse it or transcribe again**, and the CLI reuses it with `--reuse`. If the
+OpenAI key is rejected, ncaster tells you it was wrong and asks for a new one.
 
 Example draft entry:
 

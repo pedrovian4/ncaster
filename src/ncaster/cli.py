@@ -37,7 +37,13 @@ from .settings import (
     mask_key,
     prompt_for_openai_key,
 )
-from .transcribe import faster_whisper_available, run_transcription, warn_missing_whisper
+from .transcribe import (
+    faster_whisper_available,
+    find_existing_transcripts,
+    parse_transcript,
+    run_transcription,
+    warn_missing_whisper,
+)
 
 
 class NcasterGroup(click.Group):
@@ -167,7 +173,9 @@ def cast_cmd(inputs, fmt, quality, speed, output_dir, suffix, gpu, dry_run, extr
 @click.option("--draft", "draft_style", default=None,
               type=click.Choice(list(EDITING_STYLES.keys()), case_sensitive=False),
               help="After transcribing, generate an AI editing draft in this style.")
-def transcribe_cmd(inputs, language, model_size, out_fmt, output_dir, draft_style):
+@click.option("--reuse", is_flag=True, default=False,
+              help="Reuse an existing transcript (json/srt/vtt) instead of transcribing again.")
+def transcribe_cmd(inputs, language, model_size, out_fmt, output_dir, draft_style, reuse):
     """Transcribe speech in INPUT file(s) to text/subtitles via local Whisper.
 
     \b
@@ -175,12 +183,9 @@ def transcribe_cmd(inputs, language, model_size, out_fmt, output_dir, draft_styl
       ncaster transcribe talk.mp4
       ncaster transcribe aula.mov -l pt -f srt
       ncaster transcribe short.mp4 --draft narrative-visual
+      ncaster transcribe short.mp4 --reuse --draft narrative-visual
     """
-    if not faster_whisper_available():
-        warn_missing_whisper()
-        raise SystemExit(1)
-
-    # Validate the draft prerequisites up front so we fail before transcribing.
+    # Validate the draft prerequisites up front so we fail before any work.
     if draft_style:
         if not openai_available():
             warn_missing_openai()
@@ -193,19 +198,40 @@ def transcribe_cmd(inputs, language, model_size, out_fmt, output_dir, draft_styl
         f"[bold cyan]ncaster transcribe[/]  {len(files)} file(s)  "
         f"lang=[yellow]{language}[/]  model=[yellow]{model_size}[/]  "
         f"→ [bold]{out_fmt}[/]"
+        + ("  [cyan]reuse[/]" if reuse else "")
         + (f"  [magenta]+draft:{draft_style}[/]" if draft_style else ""),
         border_style="cyan",
     ))
-    console.print("[dim]Loading Whisper model (first run downloads it)…[/]\n")
 
     ai_model = os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
     results = []
+    model_announced = False
     for src in files:
         out_dir = Path(output_dir) if output_dir else src.parent
         out_dir.mkdir(parents=True, exist_ok=True)
         dst = out_dir / f"{src.stem}.{out_fmt}"
-        console.print(f"[bold]{src.name}[/] → [green]{dst}[/]")
-        result = run_transcription(src, dst, model_size, language, out_fmt)
+
+        result = None
+        if reuse:
+            existing = find_existing_transcripts(src.stem, out_dir)
+            if existing:
+                result = parse_transcript(existing[0])
+                if result is None:
+                    console.print(f"[yellow]Could not parse {existing[0].name}; transcribing instead.[/]")
+                else:
+                    console.print(f"[bold]{src.name}[/]  [dim]reusing {existing[0].name} "
+                                  f"({len(result['segments'])} segments)[/]")
+
+        if result is None:
+            if not faster_whisper_available():
+                warn_missing_whisper()
+                raise SystemExit(1)
+            if not model_announced:
+                console.print("[dim]Loading Whisper model (first run downloads it)…[/]")
+                model_announced = True
+            console.print(f"[bold]{src.name}[/] → [green]{dst}[/]")
+            result = run_transcription(src, dst, model_size, language, out_fmt)
+
         if result is None:
             console.print("  [red]Failed[/]")
             results.append(False)

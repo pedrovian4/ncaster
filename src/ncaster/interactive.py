@@ -15,7 +15,13 @@ from .config import FORMATS, MEDIA_EXTENSIONS, TRANSCRIBE_LANGS
 from .console import console
 from .convert import run_conversion
 from .probe import human_duration, human_size, probe_duration, probe_format_name
-from .transcribe import faster_whisper_available, run_transcription, warn_missing_whisper
+from .transcribe import (
+    faster_whisper_available,
+    find_existing_transcripts,
+    parse_transcript,
+    run_transcription,
+    warn_missing_whisper,
+)
 
 # questionary style that matches Rich's cyan theme.
 Q_STYLE = QStyle([
@@ -289,11 +295,22 @@ def _interactive_transcribe(selected: list[Path], base: Path) -> None:
         console.print("[dim]Cancelled.[/]")
         return
 
-    console.print("[dim]Loading Whisper model (first run downloads it)…[/]\n")
     transcribed: list[tuple[Path, dict]] = []
     results = []
+    model_announced = False
     for src in selected:
         dst = out_dir / f"{src.stem}.{out_fmt}"
+
+        # Fallback: reuse an existing transcript instead of running Whisper again.
+        reused = _maybe_reuse_transcript(src, out_dir)
+        if reused is not None:
+            transcribed.append((src, reused))
+            results.append(True)
+            continue
+
+        if not model_announced:
+            console.print("[dim]Loading Whisper model (first run downloads it)…[/]")
+            model_announced = True
         console.print(f"[bold]{src.name}[/] → [green]{dst.name}[/]")
         result = run_transcription(src, dst, model_size, language, out_fmt)
         if result is None:
@@ -306,6 +323,34 @@ def _interactive_transcribe(selected: list[Path], base: Path) -> None:
 
     if transcribed:
         _maybe_generate_drafts(transcribed, out_dir)
+
+
+def _maybe_reuse_transcript(src: Path, out_dir: Path) -> dict | None:
+    """If a transcript already exists for ``src``, ask whether to reuse it.
+
+    Returns the parsed transcript to reuse, or None to (re)transcribe.
+    """
+    existing = find_existing_transcripts(src.stem, out_dir)
+    if not existing:
+        return None
+
+    choice = questionary.select(
+        f"Existing transcription found for {src.name}:",
+        choices=[questionary.Choice(f"Use {p.name}", value=p) for p in existing]
+        + [questionary.Choice("Transcribe again (overwrite)", value="redo")],
+        style=Q_STYLE,
+    ).ask()
+
+    if choice is None or choice == "redo":
+        return None
+
+    parsed = parse_transcript(choice)
+    if parsed is None:
+        console.print(f"  [yellow]Could not parse {choice.name}; transcribing instead.[/]")
+        return None
+    console.print(f"[bold]{src.name}[/]  [dim]reusing {choice.name} "
+                  f"({len(parsed['segments'])} segments)[/]")
+    return parsed
 
 
 def _maybe_generate_drafts(transcribed: list[tuple[Path, dict]], out_dir: Path) -> None:

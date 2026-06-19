@@ -17,6 +17,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from . import library
 from .console import console
 from .probe import probe_duration
 
@@ -151,6 +152,10 @@ def run_transcription(src: Path, dst: Path, model_size: str,
             f"({info.language_probability:.0%})  "
             f"{len(segments)} segments → [green]{dst.name}[/]"
         )
+        try:
+            library.record_transcribe(src, dst, info.language, model_size, len(segments))
+        except Exception:
+            pass
         return {"segments": segments, "language": info.language}
     except Exception as e:
         console.print(f"  [red]Transcription error:[/] {e}")

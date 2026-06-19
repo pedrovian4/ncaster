@@ -2,15 +2,19 @@
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import click
+import questionary
 from rich import box
+from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__
+from . import __version__, library
 from .config import (
     FORMATS,
     QUALITIES,
@@ -285,6 +289,126 @@ def config_cmd(show, set_key):
         return
 
     prompt_for_openai_key()
+
+
+def _entry_detail(e: dict) -> str:
+    m = e.get("meta", {})
+    kind = e["kind"]
+    if kind == "convert":
+        return f"{m.get('format', '?')} · {m.get('quality', '?')} · " \
+               f"{m.get('src_mb', '?')}→{m.get('dst_mb', '?')} MB"
+    if kind == "transcribe":
+        return f"{m.get('language', '?')} · {m.get('model', '?')} · {m.get('segments', '?')} segs"
+    if kind == "draft":
+        return f"{m.get('style', '?')} · {m.get('model', '?')} · {m.get('overlays', '?')} overlays"
+    return ""
+
+
+def _print_library_table(entries: list[dict]) -> None:
+    table = Table(title="ncaster memory", box=box.SIMPLE_HEAD)
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("When", no_wrap=True)
+    table.add_column("Kind")
+    table.add_column("Source", style="cyan", no_wrap=True)
+    table.add_column("Detail", style="dim")
+    table.add_column("View", justify="center")
+    for i, e in enumerate(reversed(entries), 1):
+        when = e.get("ts", "").replace("T", " ")
+        icon = library.KIND_ICON.get(e["kind"], "•")
+        viewable = "[green]✓[/]" if e.get("stored") else "[dim]—[/]"
+        table.add_row(str(i), when, f"{icon} {e['kind']}",
+                      e.get("source") or "—", _entry_detail(e), viewable)
+    console.print(table)
+
+
+def _view_entry(entry: dict, edit: bool) -> None:
+    path = library.stored_path(entry)
+    header = (
+        f"[bold]{entry.get('source') or entry['id']}[/]  "
+        f"[dim]{entry['kind']} · {entry.get('ts', '').replace('T', ' ')}[/]\n"
+        f"[dim]{_entry_detail(entry)}[/]"
+    )
+
+    if path is None or not path.is_file():
+        # Conversions (and anything without stored text) only show metadata.
+        body = "[dim]No text to display for this entry.[/]"
+        if entry.get("output"):
+            body += f"\n[dim]Output:[/] {entry['output']}"
+        console.print(Panel(body, title=header, border_style="blue"))
+        return
+
+    if edit:
+        editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "nano"
+        subprocess.run([editor, str(path)])
+        return
+
+    text = path.read_text(encoding="utf-8")
+    suffix = path.suffix.lower()
+    if suffix == ".md":
+        content = Markdown(text)
+    elif suffix == ".json":
+        content = Syntax(text, "json", theme="ansi_dark", word_wrap=True)
+    else:  # srt / vtt / txt
+        content = Text(text)
+
+    with console.pager(styles=True):
+        console.print(Panel(header, border_style="cyan"))
+        console.print(content)
+
+
+@cli.command("library")
+@click.argument("entry", required=False)
+@click.option("-l", "--list", "list_only", is_flag=True,
+              help="Only list entries; don't prompt to open one.")
+@click.option("-e", "--edit", is_flag=True,
+              help="Open the stored file in $EDITOR instead of the built-in viewer.")
+def library_cmd(entry, list_only, edit):
+    """Browse ncaster's memory: past conversions, transcripts, and drafts.
+
+    \b
+    Examples:
+      ncaster library            # list everything (and pick one to open)
+      ncaster library 1          # open the most recent entry
+      ncaster library 20260619-153012-ab12   # open by id
+      ncaster library 2 --edit   # open in your $EDITOR
+    """
+    entries = library.load_entries()
+    if not entries:
+        console.print("[yellow]Nothing in memory yet.[/] "
+                      "Convert or transcribe something first.")
+        return
+
+    if entry is not None:
+        e = library.resolve_entry(entries, entry)
+        if e is None:
+            console.print(f"[red]No entry matches[/] '{entry}'.")
+            raise SystemExit(1)
+        _view_entry(e, edit)
+        return
+
+    _print_library_table(entries)
+
+    if list_only or not sys.stdin.isatty():
+        return
+
+    viewable = [e for e in reversed(entries) if e.get("stored")]
+    if not viewable:
+        console.print("[dim]Tip: transcripts and drafts can be opened with "
+                      "[cyan]ncaster library <#>[/].[/]")
+        return
+
+    choice = questionary.select(
+        "Open which entry?",
+        choices=[questionary.Choice(
+            f"{e.get('source') or e['id']}  ·  {e['kind']}  ·  {_entry_detail(e)}",
+            value=e,
+        ) for e in viewable] + [questionary.Choice("Cancel", value=None)],
+    ).ask()
+    if choice:
+        _view_entry(choice, edit)
+
+
+cli.add_command(library_cmd, name="memory")
 
 
 @cli.command("formats")

@@ -15,6 +15,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+from . import library
 from .config import AUDIO_BITRATE, FORMATS, PRESETS, QUALITY_CRF
 from .console import console
 from .probe import probe_duration
@@ -115,4 +116,12 @@ def run_conversion(
     if proc.returncode != 0:
         console.print(f"[red]  Error:[/] {stderr_text[-600:] if stderr_text else 'ffmpeg failed'}")
         return False
+
+    try:
+        library.record_convert(
+            src, dst, fmt, quality, speed,
+            src.stat().st_size / 1_048_576, dst.stat().st_size / 1_048_576,
+        )
+    except Exception:
+        pass
     return True

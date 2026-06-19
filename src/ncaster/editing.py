@@ -8,6 +8,7 @@ machine. Uses the lightest chat model by default (gpt-4o-mini).
 import json
 from pathlib import Path
 
+from . import library
 from .console import console
 from .probe import human_duration
 from .settings import get_openai_key, prompt_for_openai_key
@@ -181,3 +182,7 @@ def write_draft_md(
             "",
         ]
     dst.write_text("\n".join(lines), encoding="utf-8")
+    try:
+        library.record_draft(video_name, dst, style, model, language, len(items))
+    except Exception:
+        pass

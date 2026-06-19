@@ -30,6 +30,7 @@ It's built on FFmpeg and local Whisper, with an interactive mode that fuzzy-find
 - **Audio extraction** — pull audio out of a video straight into `mp3`, `flac`, `opus`, etc.
 - **Local transcription** — speech-to-text with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), running fully offline (no API, nothing uploaded). Outputs `srt`, `vtt`, `txt`, or `json`.
 - **AI editing drafts** — from a transcript, generate a per-segment **overlay plan** for short-form video (the *Narrative Visual* style): what B-roll / image / graphic to show over the speaker as they say each line. Uses OpenAI (lightweight `gpt-4o-mini`) on the transcript text only — your audio/video never leaves your machine.
+- **Memory** — every conversion, transcript, and draft is logged to a per-user library. Reopen and read your transcripts and editing drafts later in a clean terminal viewer, even if the originals are gone.
 
 ## Supported formats
 
@@ -186,6 +187,26 @@ Example draft entry:
 
 The model is configurable via `OPENAI_MODEL` (default `gpt-4o-mini`).
 
+### Memory
+
+ncaster keeps a per-user history of everything it produces under
+`~/.local/share/ncaster/` (`history.jsonl` + a `library/` of copied text
+files). Conversions are logged as metadata; transcripts and editing drafts are
+copied so you can reopen and read them later — cleanly rendered in the terminal
+(Markdown for drafts, syntax-highlighted JSON, plain text for subtitles).
+
+```bash
+ncaster library            # list everything, then pick one to open
+ncaster library --list     # just print the table
+ncaster library 1          # open the most recent entry
+ncaster library <id>       # open by id
+ncaster library 2 --edit   # open the stored file in $EDITOR
+ncaster memory             # alias for `library`
+```
+
+Only transcripts and editing drafts have viewable text; conversions show their
+metadata (formats, sizes, output path).
+
 ### Other commands
 
 ```bash
@@ -215,6 +236,7 @@ src/ncaster/
 ├── config.py        # format/codec profiles, quality & language tables
 ├── console.py       # shared Rich console
 ├── settings.py      # .env loading + OpenAI key management
+├── library.py       # memory: history log + stored transcripts/drafts
 ├── probe.py         # ffprobe helpers + human-readable formatting
 ├── convert.py       # ffmpeg command building & progress-tracked runs
 ├── transcribe.py    # local Whisper transcription + subtitle writers

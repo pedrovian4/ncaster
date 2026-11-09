@@ -31,6 +31,7 @@ It's built on FFmpeg and local Whisper, with an interactive mode that fuzzy-find
 - **Audio enhancement** — extract audio, reduce background noise, and clarify the voice (band-limit, compress, loudness-normalize) with the `enhance` command, locally via FFmpeg filters.
 - **Local transcription** — speech-to-text with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), running fully offline (no API, nothing uploaded). Outputs `srt`, `vtt`, `txt`, or `json`.
 - **AI editing drafts** — from a transcript, generate a per-segment **overlay plan** for short-form video (the *Narrative Visual* style): what B-roll / image / graphic to show over the speaker as they say each line. Uses OpenAI (lightweight `gpt-4o-mini`) on the transcript text only — your audio/video never leaves your machine.
+- **Video editing, with or without Claude Code** — cut silences and filler words, reframe to 9:16, burn word-by-word captions, and lay B-roll over the speaker. The edit is a plain timeline file; preview it part by part right in the terminal (mpv), or let Claude Code drive it through the built-in MCP server.
 - **Memory** — every conversion, transcript, and draft is logged to a per-user library. Reopen and read your transcripts and editing drafts later in a clean terminal viewer, even if the originals are gone.
 
 ## Supported formats
@@ -55,6 +56,8 @@ It's built on FFmpeg and local Whisper, with an interactive mode that fuzzy-find
 - **[FFmpeg](https://ffmpeg.org/)** (`ffmpeg` and `ffprobe` on your `PATH`)
 - **[fzf](https://github.com/junegunn/fzf)** *(optional)* — enables fuzzy file selection in interactive mode
 - **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** *(optional)* — required only for `transcribe`; installed via the `[transcribe]` extra
+- **[mpv](https://mpv.io/)** *(optional)* — plays edit previews inside the terminal
+- **[mcp](https://pypi.org/project/mcp/)** *(optional)* — required only for the Claude Code integration; installed via the `[mcp]` extra
 - **[openai](https://pypi.org/project/openai/)** *(optional)* — required only for AI editing drafts; installed via the `[ai]` extra. Needs an `OPENAI_API_KEY` (see [Configuration](#configuration))
 
 ## Installation
@@ -71,8 +74,8 @@ uv tool install .
 # with transcription support
 uv tool install ".[transcribe]"
 
-# everything (convert + transcribe + AI editing drafts)
-uv tool install ".[transcribe,ai]"
+# everything (convert + transcribe + AI drafts + Claude Code editing)
+uv tool install ".[transcribe,ai,mcp]"
 ```
 
 This puts an `ncaster` executable on your `PATH` (typically `~/.local/bin/ncaster`).
@@ -80,7 +83,7 @@ This puts an `ncaster` executable on your `PATH` (typically `~/.local/bin/ncaste
 To update after pulling changes, append `--reinstall`:
 
 ```bash
-uv tool install ".[transcribe,ai]" --reinstall
+uv tool install ".[transcribe,ai,mcp]" --reinstall
 ```
 
 ## Configuration
@@ -217,6 +220,90 @@ Each entry includes the spoken line, an overlay idea, and ready-to-use
 ```
 
 The model is configurable via `OPENAI_MODEL` (default `gpt-4o-mini`).
+
+### Video editing (terminal + Claude Code)
+
+An edit is a timeline file, `<video>.ncedit.json`, saved next to the video. It
+holds the cuts, the framing (`9:16`, `1:1`, `4:5`, `16:9`, or `source`; crop or
+blurred background), the caption style, and the overlays. Every time in it is a
+position in the **original** video, so captions and B-roll stay attached to the
+words they belong to even after you change the cuts. Every change can be undone.
+
+```bash
+ncaster edit new talk.mp4            # timeline + word-level transcript (local Whisper)
+ncaster edit suggest talk.mp4        # silences + filler words ("é", "ahn", "um"…)
+ncaster edit suggest talk.mp4 --apply
+ncaster edit talk.mp4                # interactive editor: parts, preview, cuts, captions, render
+ncaster edit preview talk.mp4 -p 2   # render part 2 at low res and play it in the terminal
+ncaster edit preview talk.mp4 --all  # watch the whole edit, part by part
+ncaster edit cut talk.mp4 12.4 15.0  # cut a source range by hand
+ncaster edit undo talk.mp4
+ncaster edit render talk.mp4         # final MP4 → talk_edit.mp4 (or <project>/renders/)
+```
+
+The output is split into **parts** of about 15 s, ending on cut points where
+possible. A preview renders one part through the same pipeline as the final
+video, just at low resolution, and plays it with `mpv` inside the terminal.
+Inside tmux it uses true-color blocks; in kitty it uses the kitty graphics
+protocol. Override with `NCASTER_PREVIEW_VO=kitty|tct|sixel|window`.
+
+#### Projects (centralized)
+
+All your edits can live in one place. Each project is a folder under
+`~/Videos/ncaster/` (change it with `ncaster project root <dir>`):
+
+```
+~/Videos/ncaster/
+└── lancamento-curso/
+    ├── project.json
+    ├── media/      source videos + their timeline, transcript, drafts
+    ├── broll/      images and clips for overlays
+    └── renders/    final videos
+```
+
+Adding a video to a project **moves** it into `media/` (no duplicate on disk),
+together with any timeline or transcript ncaster already made for it. Timelines
+store paths relative to the project, so you can rename or move a whole project
+folder.
+
+```bash
+ncaster projects                          # list projects (videos, edits, renders, size)
+ncaster project new "Lançamento" a.mp4 b.mp4
+ncaster project add lancamento c.mp4
+ncaster project open                      # pick project → video → editor
+ncaster project show lancamento
+cd "$(ncaster project path lancamento)"
+```
+
+Renders of project videos go to `renders/<video>_edit.mp4`. When you edit a
+loose video from interactive mode, ncaster offers to move it into a project.
+Claude Code sees projects too (`list_projects`, `project_info`,
+`create_project`, `add_to_project`), and checks `broll/` first when it needs
+overlays.
+
+#### With Claude Code
+
+```bash
+ncaster mcp --install    # = claude mcp add --scope user ncaster -- ncaster mcp
+```
+
+Then just ask, inside Claude Code:
+
+> corta os silêncios e os "é…" do `~/Videos/talk.mp4`, deixa em 9:16 com legenda
+> palavra por palavra e coloca `broll/cafe.mp4` quando eu falo de café
+
+Claude reads the transcript, picks the cuts, sets framing, captions and
+overlays, and previews part by part. Each preview plays for you in a new tmux
+pane, or in an mpv window outside tmux (`NCASTER_PREVIEW_OPEN=pane|window|none`).
+Claude also gets a contact sheet of the frames, so it can check the framing
+itself. It writes the same timeline file, so you can open
+`ncaster edit talk.mp4` at any time to watch, undo, or tweak, and render
+whenever you're happy with it.
+
+Tools exposed: `list_projects`, `project_info`, `create_project`,
+`add_to_project`, `create_edit`, `get_edit`, `get_transcript`, `suggest_cuts`,
+`cut`, `uncut`, `set_reframe`, `set_subtitles`, `add_overlay`,
+`remove_overlay`, `preview`, `render`, `undo`, `media_info`.
 
 ### Memory
 

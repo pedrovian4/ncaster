@@ -134,6 +134,8 @@ def interactive_mode(directory: Path | None = None, recursive: bool = False) -> 
                                value="transcribe"),
             questionary.Choice("Enhance audio — reduce noise / boost voice",
                                value="enhance"),
+            questionary.Choice("Edit video — cuts, 9:16, captions, overlays (terminal preview)",
+                               value="edit"),
         ],
         style=Q_STYLE,
     ).ask()
@@ -144,6 +146,17 @@ def interactive_mode(directory: Path | None = None, recursive: bool = False) -> 
         _interactive_transcribe(selected, base)
     elif action == "enhance":
         _interactive_enhance(selected, base)
+    elif action == "edit":
+        _interactive_edit(selected)
+
+
+def _interactive_edit(selected: list[Path]) -> None:
+    from .edit.project_commands import maybe_move_into_project, start_edit
+
+    for src in selected:
+        video = maybe_move_into_project(src)
+        if video:
+            start_edit(video)
 
 
 def _ask_output_dir(base: Path) -> Path | None:

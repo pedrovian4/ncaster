@@ -33,6 +33,8 @@ from .editing import (
     warn_missing_openai,
     write_draft_md,
 )
+from .edit.commands import edit as edit_group
+from .edit.project_commands import project as project_group
 from .interactive import interactive_mode
 from .settings import (
     USER_ENV_FILE,
@@ -371,6 +373,50 @@ def update_cmd(ref, dry_run):
         raise SystemExit(1)
 
 
+@cli.command("mcp")
+@click.option("--install", is_flag=True, default=False,
+              help="Register this server with Claude Code (claude mcp add).")
+@click.option("--scope", default="user", show_default=True,
+              type=click.Choice(["user", "project", "local"]),
+              help="Claude Code scope used with --install.")
+def mcp_cmd(install, scope):
+    """Run the MCP server so Claude Code can edit videos with ncaster.
+
+    \b
+    Register once, then ask Claude Code things like
+    "corta os silêncios do talk.mp4, deixa 9:16 e coloca legenda":
+      ncaster mcp --install
+      claude mcp add ncaster -- ncaster mcp      (same thing, by hand)
+    """
+    from .edit.mcp_server import mcp_available, run
+
+    if not mcp_available():
+        console.print(Panel.fit(
+            "[red]MCP support is not installed.[/]\n\n"
+            "  [cyan]uv tool install \"ncaster[mcp]\" --reinstall[/]\n"
+            "  [cyan]uv tool install \".[transcribe,ai,mcp]\" --reinstall[/]  [dim](from a clone)[/]",
+            border_style="red",
+        ))
+        raise SystemExit(1)
+
+    if install:
+        import shutil
+        claude = shutil.which("claude")
+        if not claude:
+            raise click.ClickException("the `claude` CLI is not on PATH")
+        exe = shutil.which("ncaster") or sys.argv[0]
+        cmd = [claude, "mcp", "add", "--scope", scope, "ncaster", "--", exe, "mcp"]
+        console.print(f"[dim]$ {' '.join(cmd)}[/]")
+        raise SystemExit(subprocess.run(cmd).returncode)
+
+    run()
+
+
+cli.add_command(edit_group)
+cli.add_command(project_group)
+cli.add_command(project_group, name="projects")
+
+
 @cli.command("config")
 @click.option("--show", is_flag=True, default=False,
               help="Show the current configuration without prompting.")
@@ -411,6 +457,9 @@ def _entry_detail(e: dict) -> str:
         stages = ", ".join(s for s in ("denoise", "voice") if m.get(s))
         return f"{m.get('profile', '?')} · {stages or '—'}" \
                + ("  · video" if m.get("keep_video") else "")
+    if kind == "edit":
+        return f"{m.get('aspect', '?')} · {m.get('cuts', 0)} cuts · " \
+               f"{m.get('overlays', 0)} overlays" + ("  · subs" if m.get("subtitles") else "")
     if kind == "transcribe":
         return f"{m.get('language', '?')} · {m.get('model', '?')} · {m.get('segments', '?')} segs"
     if kind == "draft":

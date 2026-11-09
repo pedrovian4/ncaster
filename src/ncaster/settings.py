@@ -60,19 +60,24 @@ def get_openai_key() -> str | None:
     return None
 
 
-def save_openai_key(key: str) -> Path:
-    """Persist the key to the per-user config file with private permissions."""
+def save_setting(key: str, value: str) -> Path:
+    """Persist ``key=value`` to the per-user config file (private permissions)."""
     USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     existing = _parse_env_file(USER_ENV_FILE)
-    existing[CANONICAL_KEY] = key
+    existing[key] = value
     lines = [f"{k}={v}" for k, v in existing.items()]
     USER_ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
     try:
         USER_ENV_FILE.chmod(0o600)
     except OSError:
         pass
-    os.environ[CANONICAL_KEY] = key
+    os.environ[key] = value
     return USER_ENV_FILE
+
+
+def save_openai_key(key: str) -> Path:
+    """Persist the key to the per-user config file with private permissions."""
+    return save_setting(CANONICAL_KEY, key)
 
 
 def mask_key(key: str) -> str:

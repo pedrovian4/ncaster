@@ -21,7 +21,7 @@ DATA_DIR = (
 LIBRARY_DIR = DATA_DIR / "library"
 INDEX_FILE = DATA_DIR / "history.jsonl"
 
-KIND_ICON = {"convert": "🎞", "transcribe": "📝", "draft": "🎬", "enhance": "🎙"}
+KIND_ICON = {"convert": "🎞", "transcribe": "📝", "draft": "🎬", "enhance": "🎙", "edit": "✂"}
 # Only these kinds carry viewable text content.
 VIEWABLE_KINDS = ("transcribe", "draft")
 

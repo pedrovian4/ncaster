@@ -22,6 +22,7 @@ from .config import (
     TRANSCRIPT_FORMATS,
     WHISPER_MODELS,
 )
+from .audio import ENHANCE_FORMATS, ENHANCE_PROFILES, run_enhance
 from .console import console
 from .convert import run_conversion
 from .editing import (
@@ -162,6 +163,90 @@ def cast_cmd(inputs, fmt, quality, speed, output_dir, suffix, gpu, dry_run, extr
         console.print(table)
 
 
+@cli.command("enhance")
+@click.argument("inputs", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option("-p", "--profile", default="standard",
+              type=click.Choice(list(ENHANCE_PROFILES.keys()), case_sensitive=False),
+              show_default=True, help="Noise-reduction strength.")
+@click.option("-f", "--format", "fmt", default="mp3",
+              type=click.Choice(sorted(ENHANCE_FORMATS), case_sensitive=False),
+              show_default=True, help="Output audio format.")
+@click.option("-q", "--quality", default="high",
+              type=click.Choice(["high", "medium", "low"]), show_default=True,
+              help="Output bitrate (ignored for lossless flac/wav).")
+@click.option("--no-denoise", is_flag=True, default=False,
+              help="Skip noise reduction (voice enhancement only).")
+@click.option("--no-voice", is_flag=True, default=False,
+              help="Skip voice enhancement (noise reduction only).")
+@click.option("--keep-video", is_flag=True, default=False,
+              help="Keep the video and replace its audio (output stays a video).")
+@click.option("-o", "--output-dir", default=None, type=click.Path())
+@click.option("--suffix", default="_enhanced", show_default=True,
+              help="Suffix to append to output stem.")
+@click.option("--dry-run", is_flag=True, default=False)
+def enhance_cmd(inputs, profile, fmt, quality, no_denoise, no_voice,
+                keep_video, output_dir, suffix, dry_run):
+    """Extract audio, reduce noise and enhance the voice in INPUT file(s).
+
+    \b
+    Examples:
+      ncaster enhance interview.mp4
+      ncaster enhance noisy.wav -p aggressive -f flac
+      ncaster enhance talk.mov --keep-video
+      ncaster enhance rec.m4a --no-voice -p light
+    """
+    profile = profile.lower()
+    fmt = fmt.lower()
+    denoise = not no_denoise
+    voice = not no_voice
+
+    if not denoise and not voice:
+        console.print("[red]Nothing to do:[/] --no-denoise and --no-voice can't both be set.")
+        raise SystemExit(1)
+
+    files = [Path(p) for p in inputs]
+    stages = ", ".join(
+        s for s, on in (("denoise", denoise), ("voice", voice)) if on
+    )
+    console.print(Panel.fit(
+        f"[bold cyan]ncaster enhance[/]  {len(files)} file(s)  "
+        f"profile=[yellow]{profile}[/]  [{stages}]  "
+        + (f"→ [bold]video+{quality} aac[/]" if keep_video
+           else f"→ [bold]{fmt.upper()}[/] ([yellow]{quality}[/])")
+        + ("  [dim][dry-run][/]" if dry_run else ""),
+        border_style="cyan",
+    ))
+
+    results = []
+    for src in files:
+        out_ext = src.suffix.lstrip(".") if keep_video else FORMATS[fmt]["ext"]
+        out_dir = Path(output_dir) if output_dir else src.parent
+        out_dir.mkdir(parents=True, exist_ok=True)
+        dst = out_dir / f"{src.stem}{suffix}.{out_ext}"
+        if dst.resolve() == src.resolve():
+            dst = out_dir / f"{src.stem}{suffix}_out.{out_ext}"
+
+        console.print(f"\n[bold]{src.name}[/] → [green]{dst}[/]")
+        ok = run_enhance(src, dst, profile, fmt, denoise, voice, quality,
+                         keep_video, dry_run)
+        if ok and not dry_run:
+            console.print("  [green]Done[/]")
+        elif ok:
+            console.print("  [dim]dry-run OK[/]")
+        else:
+            console.print("  [red]Failed[/]")
+        results.append((src, dst, ok))
+
+    if len(results) > 1:
+        table = Table(title="\nSummary", box=box.SIMPLE_HEAD)
+        table.add_column("Input", style="cyan", no_wrap=True)
+        table.add_column("Output", style="green", no_wrap=True)
+        table.add_column("Status")
+        for src, dst, ok in results:
+            table.add_row(src.name, dst.name, "[green]OK[/]" if ok else "[red]FAILED[/]")
+        console.print(table)
+
+
 @cli.command("transcribe")
 @click.argument("inputs", nargs=-1, required=True, type=click.Path(exists=True))
 @click.option("-l", "--language", default="auto",
@@ -261,6 +346,31 @@ def transcribe_cmd(inputs, language, model_size, out_fmt, output_dir, draft_styl
         console.print(f"\n[bold]Done:[/] {done}/{len(results)} transcribed.")
 
 
+@cli.command("update")
+@click.option("-r", "--ref", default=None,
+              help="Git branch, tag, or commit to install (default: latest on the default branch).")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Show the install command without running it.")
+def update_cmd(ref, dry_run):
+    """Update ncaster to the latest version from GitHub.
+
+    \b
+    Detects how ncaster was installed (uv tool, pipx, or pip), preserves the
+    optional extras you already have (transcribe, ai), and reinstalls from
+    https://github.com/pedrovian4/ncaster.
+
+    \b
+    Examples:
+      ncaster update
+      ncaster update -r v1.2.0      # install a specific tag
+      ncaster update --dry-run
+    """
+    from .update import run_update
+
+    if not run_update(ref=ref, dry_run=dry_run):
+        raise SystemExit(1)
+
+
 @cli.command("config")
 @click.option("--show", is_flag=True, default=False,
               help="Show the current configuration without prompting.")
@@ -297,6 +407,10 @@ def _entry_detail(e: dict) -> str:
     if kind == "convert":
         return f"{m.get('format', '?')} · {m.get('quality', '?')} · " \
                f"{m.get('src_mb', '?')}→{m.get('dst_mb', '?')} MB"
+    if kind == "enhance":
+        stages = ", ".join(s for s in ("denoise", "voice") if m.get(s))
+        return f"{m.get('profile', '?')} · {stages or '—'}" \
+               + ("  · video" if m.get("keep_video") else "")
     if kind == "transcribe":
         return f"{m.get('language', '?')} · {m.get('model', '?')} · {m.get('segments', '?')} segs"
     if kind == "draft":

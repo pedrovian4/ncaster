@@ -11,6 +11,7 @@ from rich import box
 from rich.panel import Panel
 from rich.table import Table
 
+from .audio import ENHANCE_FORMATS, ENHANCE_PROFILES, run_enhance
 from .config import FORMATS, MEDIA_EXTENSIONS, TRANSCRIBE_LANGS
 from .console import console
 from .convert import run_conversion
@@ -131,6 +132,8 @@ def interactive_mode(directory: Path | None = None, recursive: bool = False) -> 
             questionary.Choice("Convert format", value="convert"),
             questionary.Choice("Transcribe speech → text/subtitles (Whisper)",
                                value="transcribe"),
+            questionary.Choice("Enhance audio — reduce noise / boost voice",
+                               value="enhance"),
         ],
         style=Q_STYLE,
     ).ask()
@@ -139,6 +142,8 @@ def interactive_mode(directory: Path | None = None, recursive: bool = False) -> 
         _interactive_convert(selected, base)
     elif action == "transcribe":
         _interactive_transcribe(selected, base)
+    elif action == "enhance":
+        _interactive_enhance(selected, base)
 
 
 def _ask_output_dir(base: Path) -> Path | None:
@@ -231,6 +236,80 @@ def _interactive_convert(selected: list[Path], base: Path) -> None:
         results.append(ok)
 
     _print_summary(results, "converted")
+
+
+def _interactive_enhance(selected: list[Path], base: Path) -> None:
+    profile = questionary.select(
+        "Noise-reduction strength:",
+        choices=[questionary.Choice(meta["label"], value=key)
+                 for key, meta in ENHANCE_PROFILES.items()],
+        default="standard", style=Q_STYLE,
+    ).ask()
+    if not profile:
+        return
+
+    voice = questionary.confirm(
+        "Enhance the voice (band-limit, compress, normalize loudness)?",
+        default=True, style=Q_STYLE,
+    ).ask()
+    if voice is None:
+        return
+
+    keep_video = questionary.confirm(
+        "Keep the video and only replace its audio?",
+        default=False, style=Q_STYLE,
+    ).ask()
+    if keep_video is None:
+        return
+
+    fmt = "mp3"
+    quality = "high"
+    if not keep_video:
+        fmt = questionary.select(
+            "Output audio format:", choices=sorted(ENHANCE_FORMATS),
+            default="mp3", style=Q_STYLE,
+        ).ask()
+        if not fmt:
+            return
+
+    out_dir = _ask_output_dir(base)
+    if out_dir is None:
+        return
+
+    console.print()
+    table = Table(box=box.SIMPLE_HEAD, show_header=True)
+    table.add_column("File", style="cyan", no_wrap=True)
+    table.add_column("Size", justify="right")
+    table.add_column("→ Output", style="green", no_wrap=True)
+    for f in selected:
+        ext = f.suffix.lstrip(".") if keep_video else FORMATS[fmt]["ext"]
+        table.add_row(f.name, human_size(f.stat().st_size), f"{f.stem}_enhanced.{ext}")
+    console.print(table)
+
+    confirmed = questionary.confirm(
+        f"Enhance {len(selected)} file(s)  [{profile}"
+        + (" · voice" if voice else "")
+        + (" · keep-video" if keep_video else f" · {fmt}") + "]?",
+        default=True, style=Q_STYLE,
+    ).ask()
+    if not confirmed:
+        console.print("[dim]Cancelled.[/]")
+        return
+
+    console.print()
+    results = []
+    for src in selected:
+        ext = src.suffix.lstrip(".") if keep_video else FORMATS[fmt]["ext"]
+        dst = out_dir / f"{src.stem}_enhanced.{ext}"
+        if dst.resolve() == src.resolve():
+            dst = out_dir / f"{src.stem}_enhanced_out.{ext}"
+
+        console.print(f"[bold]{src.name}[/] → [green]{dst.name}[/]")
+        ok = run_enhance(src, dst, profile, fmt, True, voice, quality, keep_video, False)
+        console.print("  [green]Done[/]" if ok else "  [red]Failed[/]")
+        results.append(ok)
+
+    _print_summary(results, "enhanced")
 
 
 def _interactive_transcribe(selected: list[Path], base: Path) -> None:

@@ -20,7 +20,7 @@ It's built on FFmpeg and local Whisper, with an interactive mode that fuzzy-find
 
 ## Features
 
-- **Interactive mode** — run `ncaster` in any directory, pick files with a fuzzy finder, then choose convert or transcribe through arrow-key menus.
+- **Interactive mode** — run `ncaster` in any directory, pick files with a fuzzy finder, then choose convert, enhance, or transcribe through arrow-key menus.
 - **Fuzzy file selection** — uses [`fzf`](https://github.com/junegunn/fzf) when available (multi-select with `TAB`), and falls back to a checkbox list otherwise.
 - **Batch conversion** — convert many files at once with the non-interactive `cast` command.
 - **Quality presets** — `lossless`, `high`, `medium`, `low`, mapped to sensible CRF / bitrate values per codec.
@@ -28,6 +28,7 @@ It's built on FFmpeg and local Whisper, with an interactive mode that fuzzy-find
 - **GPU acceleration** — optional NVENC encoding via `--gpu`.
 - **Live progress bars** with ETA, plus a size-reduction summary after each job.
 - **Audio extraction** — pull audio out of a video straight into `mp3`, `flac`, `opus`, etc.
+- **Audio enhancement** — extract audio, reduce background noise, and clarify the voice (band-limit, compress, loudness-normalize) with the `enhance` command, locally via FFmpeg filters.
 - **Local transcription** — speech-to-text with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), running fully offline (no API, nothing uploaded). Outputs `srt`, `vtt`, `txt`, or `json`.
 - **AI editing drafts** — from a transcript, generate a per-segment **overlay plan** for short-form video (the *Narrative Visual* style): what B-roll / image / graphic to show over the speaker as they say each line. Uses OpenAI (lightweight `gpt-4o-mini`) on the transcript text only — your audio/video never leaves your machine.
 - **Memory** — every conversion, transcript, and draft is logged to a per-user library. Reopen and read your transcripts and editing drafts later in a clean terminal viewer, even if the originals are gone.
@@ -129,6 +130,34 @@ ncaster cast talk.mov -f mp3 -q high
 # GPU-accelerated encode
 ncaster cast video.mov -f webm --gpu
 ```
+
+### Audio enhancement (denoise + voice)
+
+Extract the audio from a video (or take an audio file), strip background noise, and clarify the voice — all locally with FFmpeg's filter chain. Noise reduction uses `afftdn` (plus `anlmdn` on the aggressive profile); voice enhancement band-limits to the vocal range, evens out dynamics with a gentle compressor, and normalizes loudness to a broadcast target (EBU R128).
+
+```bash
+# Pull clean audio out of a video as MP3
+ncaster enhance interview.mp4
+
+# Strong cleanup for a noisy recording, kept lossless
+ncaster enhance noisy.wav -p aggressive -f flac
+
+# Keep the video, just replace its audio with the enhanced track
+ncaster enhance talk.mov --keep-video
+
+# Only denoise (skip voice shaping), gentle profile
+ncaster enhance rec.m4a --no-voice -p light
+```
+
+| Option             | Default     | Description                                          |
+| ------------------ | ----------- | ---------------------------------------------------- |
+| `-p, --profile`    | `standard`  | `light`, `standard`, `aggressive` (noise strength)   |
+| `-f, --format`     | `mp3`       | `mp3`, `aac`, `flac`, `wav`, `opus`                  |
+| `-q, --quality`    | `high`      | Output bitrate (`high`/`medium`/`low`; n/a for flac/wav) |
+| `--no-denoise`     | off         | Skip noise reduction (voice enhancement only)        |
+| `--no-voice`       | off         | Skip voice enhancement (noise reduction only)        |
+| `--keep-video`     | off         | Keep the video and replace only its audio            |
+| `-o, --output-dir` | input       | Output directory                                     |
 
 ### Transcription (local Whisper)
 

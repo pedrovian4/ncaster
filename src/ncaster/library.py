@@ -21,7 +21,7 @@ DATA_DIR = (
 LIBRARY_DIR = DATA_DIR / "library"
 INDEX_FILE = DATA_DIR / "history.jsonl"
 
-KIND_ICON = {"convert": "🎞", "transcribe": "📝", "draft": "🎬"}
+KIND_ICON = {"convert": "🎞", "transcribe": "📝", "draft": "🎬", "enhance": "🎙"}
 # Only these kinds carry viewable text content.
 VIEWABLE_KINDS = ("transcribe", "draft")
 
@@ -105,6 +105,12 @@ def record_convert(src, dst, fmt, quality, speed, src_mb, dst_mb) -> dict | None
     return record("convert", source=getattr(src, "name", src), output=dst, meta={
         "format": fmt, "quality": quality, "speed": speed,
         "src_mb": round(src_mb, 1), "dst_mb": round(dst_mb, 1),
+    })
+
+
+def record_enhance(src, dst, profile, denoise, voice, keep_video) -> dict | None:
+    return record("enhance", source=getattr(src, "name", src), output=dst, meta={
+        "profile": profile, "denoise": denoise, "voice": voice, "keep_video": keep_video,
     })
 
 
